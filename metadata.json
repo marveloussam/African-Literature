@@ -1,0 +1,6 @@
+{
+  "name": "African Literature Database",
+  "description": "An academic Information Retrieval System for African literature featuring search, multi-field filtering, sorting, and analytical insights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
