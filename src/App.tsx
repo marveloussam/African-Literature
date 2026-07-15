@@ -22,6 +22,7 @@ import {
   Table
 } from 'lucide-react';
 import BookCover from './components/BookCover';
+import booksData from './data/books.json';
 
 interface Book {
   id: number;
@@ -129,73 +130,115 @@ export default function App() {
     localStorage.setItem('african_lit_bookmarks', JSON.stringify(bookmarks));
   }, [bookmarks]);
 
-  // Fetch records with all queries
-  const fetchBooks = useCallback(async () => {
+  // Load metadata for dropdowns once on mount
+  useEffect(() => {
+    const genresSet = Array.from(new Set(booksData.map(b => b.genre))).filter(Boolean).sort();
+    const countriesSet = Array.from(new Set(booksData.map(b => b.country))).filter(Boolean).sort();
+    const languagesSet = Array.from(new Set(booksData.map(b => b.language))).filter(Boolean).sort();
+    setGenres(genresSet);
+    setCountries(countriesSet);
+    setLanguages(languagesSet);
+  }, []);
+
+  // Fetch records with all queries (entirely client-side)
+  const fetchBooks = useCallback(() => {
     setLoading(true);
     setError(null);
     try {
-      // If we are showing only bookmarks, fetch a larger batch so we can filter client-side reliably
-      const fetchLimit = showOnlyBookmarks ? 100 : limit;
-      const fetchPage = showOnlyBookmarks ? 1 : page;
+      let results = [...booksData];
 
-      const params = new URLSearchParams({
-        q: searchQuery,
-        genre: selectedGenre,
-        country: selectedCountry,
-        language: selectedLanguage,
-        sortBy,
-        sortOrder,
-        page: fetchPage.toString(),
-        limit: fetchLimit.toString()
+      // 1. Text Search across all fields
+      const queryStr = searchQuery.trim().toLowerCase();
+      if (queryStr) {
+        const searchTerms = queryStr.split(/\s+/);
+        results = results.filter(book => {
+          return searchTerms.every(term => {
+            return (
+              (book.title && book.title.toLowerCase().includes(term)) ||
+              (book.author && book.author.toLowerCase().includes(term)) ||
+              (book.genre && book.genre.toLowerCase().includes(term)) ||
+              (book.country && book.country.toLowerCase().includes(term)) ||
+              (book.language && book.language.toLowerCase().includes(term)) ||
+              (book.publisher && book.publisher.toLowerCase().includes(term)) ||
+              (book.description && book.description.toLowerCase().includes(term)) ||
+              (book.year && String(book.year).includes(term))
+            );
+          });
+        });
+      }
+
+      // 2. Filters
+      if (selectedGenre) {
+        results = results.filter(book => book.genre === selectedGenre);
+      }
+      if (selectedCountry) {
+        results = results.filter(book => book.country === selectedCountry);
+      }
+      if (selectedLanguage) {
+        results = results.filter(book => book.language === selectedLanguage);
+      }
+
+      // 3. Sorting
+      results.sort((a, b) => {
+        let fieldA = a[sortBy as keyof Book];
+        let fieldB = b[sortBy as keyof Book];
+
+        // Handle numerical vs string sorting
+        if (typeof fieldA === 'number' && typeof fieldB === 'number') {
+          return sortOrder === 'asc' ? fieldA - fieldB : fieldB - fieldA;
+        }
+
+        // Default string comparison
+        fieldA = String(fieldA || '').toLowerCase();
+        fieldB = String(fieldB || '').toLowerCase();
+
+        if (fieldA < fieldB) return sortOrder === 'asc' ? -1 : 1;
+        if (fieldA > fieldB) return sortOrder === 'asc' ? 1 : -1;
+        return 0;
       });
 
-      const response = await fetch(`/api/books?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error('Failed to retrieve literature data');
-      }
-      const data: ApiResponse = await response.json();
-
-      let finalRecords = data.records;
-      let finalTotal = data.total;
-      let finalTotalPages = data.totalPages;
+      let finalTotal = results.length;
+      let finalRecords = results;
 
       if (showOnlyBookmarks) {
         // Filter by bookmarks locally
-        const bookmarkedRecords = data.records.filter(book => bookmarks.includes(book.id));
-        finalTotal = bookmarkedRecords.length;
-        finalTotalPages = Math.ceil(finalTotal / limit);
-        
-        // Paginate locally
-        const startIndex = (page - 1) * limit;
-        finalRecords = bookmarkedRecords.slice(startIndex, startIndex + limit);
+        finalRecords = results.filter(book => bookmarks.includes(book.id));
+        finalTotal = finalRecords.length;
       }
 
-      setBooks(finalRecords);
+      // 4. Pagination
+      const totalPagesCalculated = Math.max(1, Math.ceil(finalTotal / limit));
+      setTotalPages(totalPagesCalculated);
       setTotal(finalTotal);
-      setTotalPages(Math.max(1, finalTotalPages));
 
-      // Only set dropdown filter options on initial or if they are not already filled
-      if (genres.length === 0) setGenres(data.genres || []);
-      if (countries.length === 0) setCountries(data.countries || []);
-      if (languages.length === 0) setLanguages(data.languages || []);
+      // Adjust page if it exceeds the new totalPages due to filtering
+      let activePage = page;
+      if (page > totalPagesCalculated) {
+        activePage = 1;
+        setPage(1);
+      }
+
+      const startIndex = (activePage - 1) * limit;
+      const paginatedResults = finalRecords.slice(startIndex, startIndex + limit);
+
+      setBooks(paginatedResults);
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'An error occurred while fetching books.');
     } finally {
       setLoading(false);
     }
-  }, [searchQuery, selectedGenre, selectedCountry, selectedLanguage, sortBy, sortOrder, page, limit, showOnlyBookmarks, bookmarks, genres.length, countries.length, languages.length]);
+  }, [searchQuery, selectedGenre, selectedCountry, selectedLanguage, sortBy, sortOrder, page, limit, showOnlyBookmarks, bookmarks]);
 
-  // Fetch details for a specific book
-  const fetchBookDetails = useCallback(async (id: number) => {
+  // Fetch details for a specific book (entirely client-side)
+  const fetchBookDetails = useCallback((id: number) => {
     setSelectedBookLoading(true);
     try {
-      const response = await fetch(`/api/books/${id}`);
-      if (!response.ok) {
+      const book = booksData.find(b => b.id === id);
+      if (!book) {
         throw new Error('Could not load record details');
       }
-      const data: Book = await response.json();
-      setSelectedBook(data);
+      setSelectedBook(book);
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Error loading record.');
@@ -271,7 +314,7 @@ export default function App() {
   // Related Books logic (books from same genre/country, excluding current)
   const getRelatedBooks = () => {
     if (!selectedBook) return [];
-    return books
+    return booksData
       .filter(b => b.id !== selectedBook.id && (b.genre === selectedBook.genre || b.country === selectedBook.country))
       .slice(0, 3);
   };
